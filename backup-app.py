@@ -22,7 +22,7 @@ class BackupApp(QMainWindow):
         self.setWindowTitle("Резервное копирование файлов")
         self.setGeometry(100, 100, 900, 700)
         self.setWindowIcon(QIcon('icon.ico'))
-        # НАСТРОЙКИ ДЛЯ macOS
+        # Настройка для macOS
         if platform.system() == "Darwin":
             self.setStyleSheet("""
                 QMainWindow {
@@ -179,20 +179,25 @@ class BackupApp(QMainWindow):
         additional_layout = QGridLayout(additional_group)
         additional_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
 
+        # Копировать содержимое папки вместо всей папки
+        self.copy_folder_contents = QCheckBox("Копировать содержимое папки (без самой папки)")
+        self.copy_folder_contents.setChecked(False)
+        additional_layout.addWidget(self.copy_folder_contents, 0, 0, 1, 2)
+
         # Добавить дату к имени сохраненной копии файла
         self.keep_history = QCheckBox("Добавить дату к имени сохраненной копии файла")
         self.keep_history.setChecked(True)
-        additional_layout.addWidget(self.keep_history, 0, 0, 1, 2)
+        additional_layout.addWidget(self.keep_history, 1, 0, 1, 2)
 
         # Создавать отдельную папку "Резервное копирование" + дата
         self.create_backup_folder = QCheckBox('Создавать отдельную папку с названием «Резервное копирование дд-мм-гггг» при каждом копировании')
         self.create_backup_folder.setChecked(True)
-        additional_layout.addWidget(self.create_backup_folder, 1, 0, 1, 2)
+        additional_layout.addWidget(self.create_backup_folder, 2, 0, 1, 2)
 
         # Автозапуск при старте системы
         self.auto_start_cb = QCheckBox("Запускать приложение при старте системы")
         self.auto_start_cb.stateChanged.connect(self.toggle_auto_start)
-        additional_layout.addWidget(self.auto_start_cb, 2, 0, 1, 2)
+        additional_layout.addWidget(self.auto_start_cb, 3, 0, 1, 2)
         settings_layout.addWidget(additional_group)
         settings_layout.addStretch()
         
@@ -314,14 +319,32 @@ class BackupApp(QMainWindow):
     def calculate_total_backup_size(self):
         """Вычисляет общий размер файлов для копирования"""
         total_size = 0
-        files_to_copy = self.get_files_to_copy()
         
-        for file_path in files_to_copy:
-            try:
-                if os.path.exists(file_path):
-                    total_size += os.path.getsize(file_path)
-            except OSError:
-                continue
+        # Для папок
+        for folder_path in self.source_folders:
+            if os.path.isdir(folder_path):
+                try:
+                    if self.copy_folder_contents.isChecked():
+                        # Режим содержимого папки - считаем только файлы
+                        for root, dirs, files in os.walk(folder_path):
+                            for file in files:
+                                file_path = os.path.join(root, file)
+                                if os.path.exists(file_path):
+                                    total_size += os.path.getsize(file_path)
+                    else:
+                        # Режим всей папки - считаем всю папку
+                        for root, dirs, files in os.walk(folder_path):
+                            for file in files:
+                                file_path = os.path.join(root, file)
+                                if os.path.exists(file_path):
+                                    total_size += os.path.getsize(file_path)
+                except OSError:
+                    continue
+        
+        # Для отдельных файлов
+        for file_path in self.source_files:
+            if os.path.isfile(file_path) and os.path.exists(file_path):
+                total_size += os.path.getsize(file_path)
         
         return total_size
 
@@ -383,9 +406,10 @@ class BackupApp(QMainWindow):
         self.log_message("Список файлов очищен")
     
     def get_files_to_copy(self):
-        """Получает список всех файлов для копирования"""
+        """Получает список всех файлов для копирования (используется для подсчета размера)"""
         files_to_copy = []
         
+        # Для папок
         for folder_path in self.source_folders:
             if os.path.isdir(folder_path):
                 try:
@@ -393,9 +417,10 @@ class BackupApp(QMainWindow):
                         for file in files:
                             file_path = os.path.join(root, file)
                             files_to_copy.append(file_path)
-                except (PermissionError, OSError) as e:
-                    self.log_message(f"Ошибка доступа к папке {folder_path}: {str(e)}")
+                except (PermissionError, OSError):
+                    continue
         
+        # Для отдельных файлов
         for file_path in self.source_files:
             if os.path.isfile(file_path):
                 files_to_copy.append(file_path)
@@ -735,6 +760,9 @@ class BackupApp(QMainWindow):
             
             create_backup_folder = self.settings.value("create_backup_folder", True, type=bool)
             self.create_backup_folder.setChecked(bool(create_backup_folder))
+
+            copy_folder_contents = self.settings.value("copy_folder_contents", False, type=bool)
+            self.copy_folder_contents.setChecked(bool(copy_folder_contents))
             
             # Загрузка и синхронизация автозапуска
             auto_start_setting = self.settings.value("auto_start", False, type=bool)
@@ -819,6 +847,8 @@ class BackupApp(QMainWindow):
         
         self.settings.setValue("auto_start", self.auto_start_cb.isChecked())
         self.settings.setValue("timer_active", self.backup_timer.isActive())
+        # Сохраняем настройку режима копирования папок
+        self.settings.setValue("copy_folder_contents", self.copy_folder_contents.isChecked())
         
         self.settings.sync()
 
@@ -1060,7 +1090,7 @@ class BackupApp(QMainWindow):
                 return
             
             total_backup_size = self.calculate_total_backup_size()
-            
+        
             # Показываем прогресс бар для больших копирований
             self.show_progress_bar(total_backup_size)
             actual_destination = self.destination_folder
@@ -1079,40 +1109,86 @@ class BackupApp(QMainWindow):
             if not os.path.exists(actual_destination):
                 os.makedirs(actual_destination)
             
-            files_to_copy = self.get_files_to_copy()
-            
-            if not files_to_copy:
-                self.log_message("Нет файлов для копирования")
-                self.hide_progress_bar()
-                return
-            
             copied_count = 0
             total_size = 0
             
-            for file_path in files_to_copy:
-                try:
-                    if not os.path.exists(file_path):
-                        continue
-                    dest_path = file_path
-                    for folder_path in self.source_folders:
-                        if file_path.startswith(folder_path):
-                            rel_path = os.path.relpath(file_path, folder_path)
-                            dest_path = os.path.join(actual_destination, rel_path)
-                            break
-                    else:
-                        dest_path = os.path.join(actual_destination, os.path.basename(file_path))
+            # КОПИРОВАНИЕ ПАПОК
+            for folder_path in self.source_folders:
+                if not os.path.exists(folder_path):
+                    continue
                     
-                    # Создаем папки если нужно
-                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                try:
+                    if self.copy_folder_contents.isChecked():
+                        # РЕЖИМ: Содержимое папки (без самой папки)
+                        # Копируем все файлы из папки и подпапок напрямую в destination
+                        for root, dirs, files in os.walk(folder_path):
+                            for file in files:
+                                source_file_path = os.path.join(root, file)
+                                
+                                # Создаем относительный путь от исходной папки
+                                rel_path = os.path.relpath(source_file_path, folder_path)
+                                dest_file_path = os.path.join(actual_destination, rel_path)
+                                
+                                # Создаем папки для файла
+                                os.makedirs(os.path.dirname(dest_file_path), exist_ok=True)
+                                
+                                # Добавляем timestamp если нужно
+                                if self.keep_history.isChecked():
+                                    name, ext = os.path.splitext(dest_file_path)
+                                    timestamp = datetime.now().strftime("%d.%m.%Y_%H-%M")
+                                    dest_file_path = f"{name}_{timestamp}{ext}"
+                                
+                                shutil.copy2(source_file_path, dest_file_path)
+                                file_size = os.path.getsize(dest_file_path)
+                                total_size += file_size
+                                copied_count += 1
+                                
+                                # Обновляем прогресс
+                                self.update_progress(file_size)
+                                
+                    else:
+                        # РЕЖИМ ПО УМОЛЧАНИЮ: Вся папка со структурой
+                        # Определяем имя папки для копирования
+                        folder_name = os.path.basename(folder_path)
+                        dest_folder_path = os.path.join(actual_destination, folder_name)
+                        
+                        # Копируем всю папку со структурой
+                        if os.path.exists(dest_folder_path):
+                            # Если папка уже существует, удаляем ее
+                            shutil.rmtree(dest_folder_path)
+                        
+                        shutil.copytree(folder_path, dest_folder_path)
+                        
+                        # Подсчитываем размер скопированной папки
+                        for root, dirs, files in os.walk(dest_folder_path):
+                            for file in files:
+                                file_path = os.path.join(root, file)
+                                file_size = os.path.getsize(file_path)
+                                total_size += file_size
+                                copied_count += 1
+                        
+                        self.log_message(f"✓ Скопирована папка: {folder_name}")
+                        
+                except Exception as e:
+                    self.log_message(f"✗ Ошибка при копировании папки {folder_path}: {str(e)}")
+            
+            # КОПИРОВАНИЕ ОТДЕЛЬНЫХ ФАЙЛОВ
+            for file_path in self.source_files:
+                if not os.path.exists(file_path):
+                    continue
+                    
+                try:
+                    # Для отдельных файлов всегда копируем как есть
+                    dest_file_path = os.path.join(actual_destination, os.path.basename(file_path))
                     
                     # Добавляем timestamp если нужно
                     if self.keep_history.isChecked():
-                        name, ext = os.path.splitext(dest_path)
+                        name, ext = os.path.splitext(dest_file_path)
                         timestamp = datetime.now().strftime("%d.%m.%Y_%H-%M")
-                        dest_path = f"{name}_{timestamp}{ext}"
+                        dest_file_path = f"{name}_{timestamp}{ext}"
                     
-                    shutil.copy2(file_path, dest_path)
-                    file_size = os.path.getsize(dest_path)
+                    shutil.copy2(file_path, dest_file_path)
+                    file_size = os.path.getsize(dest_file_path)
                     total_size += file_size
                     copied_count += 1
                     
@@ -1120,7 +1196,7 @@ class BackupApp(QMainWindow):
                     self.update_progress(file_size)
                     
                 except Exception as e:
-                    self.log_message(f"✗ Ошибка при копировании {os.path.basename(file_path)}: {str(e)}")
+                    self.log_message(f"✗ Ошибка при копировании файла {os.path.basename(file_path)}: {str(e)}")
             
             # Скрываем прогресс бар после завершения
             self.hide_progress_bar()
@@ -1134,7 +1210,7 @@ class BackupApp(QMainWindow):
         except Exception as e:
             self.log_message(f"✗ Ошибка при копировании: {str(e)}")
             self.hide_progress_bar()
-            
+
     def log_message(self, message):
         """Логирование сообщений с временной меткой"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
