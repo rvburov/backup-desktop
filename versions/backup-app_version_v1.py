@@ -1,3 +1,4 @@
+# Базавая программа
 import sys
 import os
 import shutil
