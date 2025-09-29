@@ -259,22 +259,6 @@ class BackupApp(QMainWindow):
         self.setWindowTitle("Резервное копирование файлов")
         self.setGeometry(100, 100, 900, 700)
         self.setWindowIcon(QIcon('icon.ico'))
-        # Настройка для macOS
-        if platform.system() == "Darwin":
-            self.setStyleSheet("""
-                QMainWindow {
-                    background-color: #F5F5F7;
-                }
-                QGroupBox {
-                    font-weight: bold;
-                    margin-top: 1ex;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    left: 10px;
-                    padding: 0 5px 0 5px;
-                }
-            """)
         # Инициализация переменных для хранения данных
         self.source_folders = []  
         self.source_files = []    
