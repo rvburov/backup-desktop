@@ -9,10 +9,10 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QGroupBox, QMessageBox, QCheckBox, QTimeEdit, 
                              QGridLayout, QListWidget, QTabWidget,
                              QSizePolicy, QProgressBar, QStackedWidget, 
-                             QToolBar, QAction, QFrame, QTabBar)
+                             QToolBar, QAction, QFrame)
 from PyQt5.QtCore import QTimer, Qt, QTime, QSettings, QSize
-from PyQt5.QtGui import QFont, QIcon, QPalette, QColor
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import QThread, pyqtSignal, QStandardPaths
 
 
 class BackupWorker(QThread):
@@ -503,26 +503,65 @@ class MultiTabBackupWorker(QThread):
 class BackupApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        # Инициализация настроек приложения
-        self.settings = QSettings("MyCompany", "BackupApp")
+
         # Основные настройки окна
         self.setWindowTitle("Резервное копирование файлов")
         self.setGeometry(100, 100, 900, 700)
-        self.setWindowIcon(QIcon('icon.ico'))
+        
+        # Определяем путь к ресурсам
+        if getattr(sys, 'frozen', False):
+            self.base_path = sys._MEIPASS
+        else:
+            self.base_path = os.path.dirname(os.path.abspath(__file__))
+        
+        # Загрузка иконки
+        icon_path = os.path.join(self.base_path, "icon.ico")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+        else:
+            self.setWindowIcon(self.style().standardIcon(self.style().SP_ComputerIcon))
+        
+        # ИНИЦИАЛИЗИРУЕМ UI ПЕРВЫМ!
+        self.init_ui()
+        
+        # ИСПОЛЬЗУЕМ СТАНДАРТНЫЕ ПУТИ ОС ДЛЯ НАСТРОЕК
+        config_dir = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
+        if not config_dir:
+            config_dir = os.path.join(os.path.expanduser("~"), ".backupapp")
+        
+        if not os.path.exists(config_dir):
+            os.makedirs(config_dir, exist_ok=True)
+        
+        settings_path = os.path.join(config_dir, "settings.ini")
+        
+        # КОПИРУЕМ ДЕФОЛТНЫЕ НАСТРОЙКИ ПРИ ПЕРВОМ ЗАПУСКЕ
+        if not os.path.exists(settings_path):
+            try:
+                default_settings_path = os.path.join(self.base_path, "settings.ini")
+                if os.path.exists(default_settings_path):
+                    shutil.copy2(default_settings_path, settings_path)
+                    self.log_message(f"Создан файл настроек: {settings_path}")
+                else:
+                    self.log_message("⚠ Файл настроек по умолчанию не найден в ресурсах")
+            except Exception as e:
+                self.log_message(f"✗ Не удалось скопировать настройки по умолчанию: {e}")
+        else:
+            self.log_message(f"Используется существующий файл настроек: {settings_path}")
+        
+        # Инициализация настроек приложения
+        self.settings = QSettings(settings_path, QSettings.IniFormat)
+        self.settings.setIniCodec("UTF-8")
+
         # Инициализация переменных для хранения данных
-        # УДАЛЕНО: больше не храним глобальные списки файлов и папок
-        # Таймер для автоматического копирования
         self.backup_timer = QTimer()
         self.backup_timer.timeout.connect(self.check_backup_time)
         # Переменные для отслеживания состояния копирования
         self.last_backup_date = None
         self.current_backup_size = 0  
         self.copied_size = 0  
-        # Инициализация пользовательского интерфейса
-        self.init_ui()
+        
         # Загрузка сохраненных настроек
         self.load_settings()
-
         self.backup_worker = None
         
     def init_ui(self):
@@ -635,14 +674,16 @@ class BackupApp(QMainWindow):
         # Разделитель
         toolbar.addSeparator()
 
-        # Выбор файлов - используем свою иконку
-        files_icon = QIcon('icons/files_icon.png')  
+        # Выбор файлов
+        files_icon_path = os.path.join(self.base_path, "icons", "files_icon.png")
+        files_icon = QIcon(files_icon_path)
         files_action = QAction(files_icon, "Выбор файлов", self)
         files_action.triggered.connect(self.show_files_section)
         toolbar.addAction(files_action)
         
-        # Настройки - используем свою иконку
-        settings_icon = QIcon('icons/settings_icon.png')  
+        # Настройки
+        settings_icon_path = os.path.join(self.base_path, "icons", "settings_icon.png")
+        settings_icon = QIcon(settings_icon_path)
         settings_action = QAction(settings_icon, "Настройки", self)
         settings_action.triggered.connect(self.show_settings_section)
         toolbar.addAction(settings_action)
@@ -697,8 +738,10 @@ class BackupApp(QMainWindow):
         """Добавление новой вкладки с полным функционалом"""
         try:
             # Упрощенная логика создания имени вкладки
-            if name is None or not isinstance(name, str):
+            if name is None or not isinstance(name, str) or not name.strip():
                 name = "Без названия"
+            else:
+                name = name.strip()
             
             # Обрезаем название для отображения во вкладке
             display_name = self.truncate_tab_title(name)
@@ -730,7 +773,7 @@ class BackupApp(QMainWindow):
                 'title_edit': tab_title_edit
             }
             
-            # Подключаем сигнал завершения редактирования (когда поле теряет фокус или нажат Enter)
+            # Подключаем сигнал завершения редактирования
             tab_title_edit.editingFinished.connect(lambda: self.on_tab_title_finished(tab_data))
 
             # Добавляем вкладку с обрезанным названием для отображения
@@ -796,17 +839,28 @@ class BackupApp(QMainWindow):
             # Сохраняем данные вкладки в свойстве виджета
             tab_widget.tab_data = tab_data
             
-            # Загружаем настройки для этой вкладки
-            self.load_tab_settings(tab_data, name)
-            
             return tab_data
             
         except Exception as e:
             self.log_message(f"Ошибка при создании вкладки: {str(e)}")
+            # Создаем вкладку с гарантированно корректным названием
             default_name = "Без названия"
             tab_widget = QWidget()
-            self.tabs_widget.addTab(tab_widget, default_name)
-            return None
+            index = self.tabs_widget.addTab(tab_widget, self.truncate_tab_title(default_name))
+            
+            # Создаем базовые данные для вкладки
+            tab_data = {
+                'source_folders': [],
+                'source_files': [],
+                'destination_folder': '',
+                'folders_list': QListWidget(),
+                'files_list': QListWidget(),
+                'dest_edit': QLineEdit(),
+                'title_edit': QLineEdit(default_name)
+            }
+            tab_widget.tab_data = tab_data
+            
+            return tab_data
 
     def on_tab_title_finished(self, tab_data):
         """Обрабатывает завершение редактирования заголовка вкладки"""
@@ -859,9 +913,12 @@ class BackupApp(QMainWindow):
             current_widget = self.tabs_widget.widget(index)
             if hasattr(current_widget, 'tab_data'):
                 tab_name = self.tabs_widget.tabText(index)
-                self.save_tab_settings(current_widget.tab_data, tab_name)
+                self.save_tab_settings(current_widget.tab_data, index)
             
             self.tabs_widget.removeTab(index)
+            
+            # Сохраняем настройки после удаления вкладки
+            self.save_settings()
 
     def get_current_tab_data(self):
         """Получение данных текущей активной вкладки"""
@@ -945,28 +1002,31 @@ class BackupApp(QMainWindow):
             self.save_tab_settings(tab_data, tab_name)
 
     def save_tab_settings(self, tab_data, tab_name):
-        """Сохранение настроек конкретной вкладки"""
-        self.settings.beginGroup(f"Tab_{tab_name}")
-        self.settings.setValue("source_folders", tab_data['source_folders'])
-        self.settings.setValue("source_files", tab_data['source_files'])
-        self.settings.setValue("destination_folder", tab_data['destination_folder'])
-        self.settings.setValue("tab_title", tab_data['title_edit'].text())
-        self.settings.endGroup()
+        """Сохранение настроек конкретной вкладки по индексу"""
+        # Находим индекс вкладки
+        tab_index = self.find_tab_index_by_data(tab_data)
+        if tab_index >= 0:
+            self.settings.beginGroup(f"Tab_{tab_index}")
+            self.settings.setValue("source_folders", tab_data['source_folders'])
+            self.settings.setValue("source_files", tab_data['source_files'])
+            self.settings.setValue("destination_folder", tab_data['destination_folder'])
+            self.settings.setValue("tab_title", tab_data['title_edit'].text())
+            self.settings.endGroup()
 
-    def load_tab_settings(self, tab_data, tab_name):
-        """Загрузка настроек конкретной вкладки"""
-        self.settings.beginGroup(f"Tab_{tab_name}")
+    def load_tab_settings(self, tab_data, tab_index):
+        """Загрузка настроек конкретной вкладки по индексу"""
+        self.settings.beginGroup(f"Tab_{tab_index}")
         
         # Загружаем заголовок вкладки
-        saved_title = self.settings.value("tab_title", tab_name)
+        saved_title = self.settings.value("tab_title", "Без названия")
         if saved_title and isinstance(saved_title, str):
             tab_data['title_edit'].setText(saved_title)
             # Обрезаем длинное название для отображения
             display_title = self.truncate_tab_title(saved_title)
             # Находим индекс этой вкладки и обновляем заголовок
-            tab_index = self.find_tab_index_by_data(tab_data)
-            if tab_index >= 0:
-                self.tabs_widget.setTabText(tab_index, display_title)
+            current_index = self.find_tab_index_by_data(tab_data)
+            if current_index >= 0:
+                self.tabs_widget.setTabText(current_index, display_title)
 
         # Загружаем список папок
         source_folders = self.settings.value("source_folders", [])
@@ -1004,6 +1064,20 @@ class BackupApp(QMainWindow):
         
         self.settings.endGroup()
     
+    def remove_all_tab_settings(self):
+        """Удаляет все группы настроек вкладок"""
+        # Получаем все ключи настроек
+        all_keys = self.settings.allKeys()
+        
+        # Находим и удаляем все группы Tab_*
+        for key in all_keys:
+            if key.startswith('Tab_'):
+                # Удаляем группу (ключ)
+                self.settings.remove(key)
+        
+        # Синхронизируем изменения
+        self.settings.sync()
+
     def init_settings_section(self):
         """Инициализация раздела настроек (без QGroupBox-контейнера)"""
         settings_layout = self.settings_widget.layout()
@@ -1012,7 +1086,7 @@ class BackupApp(QMainWindow):
         title_label = QLabel("Настройки")
         title_label.setStyleSheet("font-weight: bold;")
         settings_layout.addWidget(title_label)
-
+        
         # Разделительная линия
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
@@ -1063,12 +1137,12 @@ class BackupApp(QMainWindow):
         # ДОБАВЛЯЕМ НОВЫЙ ЧЕКБОКС
         self.copy_all_tabs = QCheckBox("Копировать файлы из всех вкладок")
         self.copy_all_tabs.setChecked(False)
-        additional_layout.addWidget(self.copy_all_tabs, 0, 0, 1, 2)  # Добавляем первым
+        additional_layout.addWidget(self.copy_all_tabs, 0, 0, 1, 2)
 
         # Копировать содержимое папки вместо всей папки
         self.copy_folder_contents = QCheckBox("Копировать содержимое папки (без самой папки)")
         self.copy_folder_contents.setChecked(False)
-        additional_layout.addWidget(self.copy_folder_contents, 1, 0, 1, 2)  # Сдвигаем остальные
+        additional_layout.addWidget(self.copy_folder_contents, 1, 0, 1, 2)
 
         # Добавить дату к имени сохранённой копии файла
         self.keep_history = QCheckBox("Добавить дату к имени сохранённой копии файла")
@@ -1085,7 +1159,7 @@ class BackupApp(QMainWindow):
         # Автозапуск при старте системы
         self.auto_start_cb = QCheckBox("Запускать приложение при старте системы")
         self.auto_start_cb.stateChanged.connect(self.toggle_auto_start)
-        additional_layout.addWidget(self.auto_start_cb, 4, 0, 1, 2)  # Сдвигаем
+        additional_layout.addWidget(self.auto_start_cb, 4, 0, 1, 2)
 
         settings_layout.addWidget(additional_group)
 
@@ -1093,23 +1167,127 @@ class BackupApp(QMainWindow):
         reset_group = QGroupBox("Сброс настроек")
         reset_layout = QVBoxLayout(reset_group)
         reset_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-
+        
         # Кнопка сброса настроек
-        self.reset_settings_btn = QPushButton("Сбросить все настройки по умолчанию")
-        self.reset_settings_btn.setStyleSheet("background-color: #FF5722; color: white; font-weight: bold;")
-        self.reset_settings_btn.clicked.connect(self.reset_all_settings)
-        reset_layout.addWidget(self.reset_settings_btn)
-
-        # Информационный текст
-        reset_info = QLabel("Это действие очистит все настройки и вкладки, восстановив значения по умолчанию. Приложение будет перезапущено.")
+        self.reset_btn = QPushButton("Сбросить все настройки по умолчанию")
+        self.reset_btn.setStyleSheet("background-color: #FF9800; color: white;")
+        self.reset_btn.clicked.connect(self.reset_settings_to_default)
+        reset_layout.addWidget(self.reset_btn)
+        
+        # Описание функции
+        reset_info = QLabel("Эта функция очистит все настройки и восстановит значения по умолчанию. "
+                        "Полезно при возникновении проблем в работе приложения.")
         reset_info.setWordWrap(True)
-        reset_info.setStyleSheet("color: #666; font-size: 9pt; padding: 5px;")
+        reset_info.setStyleSheet("color: #666; font-size: 11px;")
         reset_layout.addWidget(reset_info)
-
+        
         settings_layout.addWidget(reset_group)
 
         # Растягивающий элемент (чтобы элементы прижимались к верху)
         settings_layout.addStretch()
+
+    def reset_settings_to_default(self):
+        """Сбрасывает все настройки к значениям по умолчанию"""
+        # Создаем кастомное сообщение с русскими кнопками
+        msg_box = QMessageBox()
+        msg_box.setWindowTitle("Подтверждение сброса")
+        msg_box.setText("Вы уверены, что хотите сбросить все настройки к значениям по умолчанию?")
+        msg_box.setIcon(QMessageBox.Warning)
+        
+        # Создаем кнопки с русским текстом
+        yes_button = msg_box.addButton("Да", QMessageBox.YesRole)
+        no_button = msg_box.addButton("Нет", QMessageBox.NoRole)
+        msg_box.setDefaultButton(no_button)
+        
+        msg_box.exec_()
+        
+        if msg_box.clickedButton() == yes_button:
+            try:
+                # Останавливаем таймер, если он активен
+                if self.backup_timer.isActive():
+                    self.backup_timer.stop()
+                
+                # Очищаем ВСЕ настройки
+                self.settings.clear()
+                
+                # Устанавливаем настройки по умолчанию как указано в задании
+                self.set_default_settings_forced()
+                
+                # Применяем настройки к интерфейсу
+                self.apply_default_settings_to_ui()
+                
+                # Сохраняем настройки
+                self.save_settings()
+                
+                self.log_message("Все настройки сброшены к значениям по умолчанию")
+                QMessageBox.information(self, "Сброс завершен", 
+                                    "Все настройки успешно сброшены к значениям по умолчанию.")
+                
+            except Exception as e:
+                self.log_message(f"✗ Ошибка при сбросе настроек: {str(e)}")
+                QMessageBox.critical(self, "Ошибка", 
+                                f"Не удалось сбросить настройки:\n{str(e)}")
+
+    def set_default_settings_forced(self):
+        """Принудительно устанавливает настройки по умолчанию как указано в задании"""
+        # [General] секция
+        self.settings.setValue("auto_start", False)
+        self.settings.setValue("backup_time", "00:00")
+        self.settings.setValue("copy_all_tabs", False)
+        self.settings.setValue("copy_folder_contents", False)
+        self.settings.setValue("create_backup_folder", False)
+        self.settings.setValue("keep_history", False)
+        self.settings.setValue("monthday", 1)
+        self.settings.setValue("period_type", "Ежедневно")
+        self.settings.setValue("tab_count", 1)
+        self.settings.setValue("tab_names", "Без названия")
+        self.settings.setValue("timer_active", False)
+        self.settings.setValue("weekday", 0)
+        
+        # [Tab_0] секция - очищаем данные первой вкладки
+        self.settings.setValue("Tab_0/source_folders", [])
+        self.settings.setValue("Tab_0/source_files", [])
+        self.settings.setValue("Tab_0/destination_folder", "")
+        self.settings.setValue("Tab_0/tab_title", "Без названия")
+        
+        # Удаляем все остальные вкладки
+        all_keys = self.settings.allKeys()
+        for key in all_keys:
+            if key.startswith('Tab_') and key != 'Tab_0':
+                self.settings.remove(key)
+
+    def apply_default_settings_to_ui(self):
+        """Применяет настройки по умолчанию к пользовательскому интерфейсу"""
+        # Сбрасываем основные настройки
+        self.period_type_combo.setCurrentText("Ежедневно")
+        self.time_edit.setTime(QTime(0, 0))  # 00:00
+        self.weekday_combo.setCurrentIndex(0)
+        self.monthday_spin.setValue(1)
+        
+        # Сбрасываем чекбоксы
+        self.copy_all_tabs.setChecked(False)
+        self.copy_folder_contents.setChecked(False)
+        self.keep_history.setChecked(False)
+        self.create_backup_folder.setChecked(False)
+        self.auto_start_cb.setChecked(False)
+        
+        # Обновляем UI для периода
+        self.update_ui_for_period("Ежедневно")
+        
+        # Очищаем все вкладки и создаем одну чистую
+        while self.tabs_widget.count() > 0:
+            self.tabs_widget.removeTab(0)
+        
+        # Создаем чистую вкладку по умолчанию
+        self.add_new_tab("Без названия")
+        
+        # Сбрасываем состояние кнопок
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.next_backup_label.setText("Следующее копирование: остановлено")
+        
+        # Отключаем автозапуск в системе
+        self.disable_auto_start()
 
     def show_files_section(self):
         """Показать раздел выбора файлов"""
@@ -1693,22 +1871,47 @@ class BackupApp(QMainWindow):
         try:
             # Загружаем список вкладок
             tab_count = self.settings.value("tab_count", 1, type=int)
-            tab_names = self.settings.value("tab_names", ["Без названия"])  # Изменено на "Без названия"
+            tab_names_value = self.settings.value("tab_names", "Без названия")
             
-            # Упрощенная проверка tab_names
-            if not tab_names or not isinstance(tab_names, list):
-                tab_names = ["Без названия"]  # Изменено на "Без названия"
+            # Обрабатываем tab_names в зависимости от типа
+            if isinstance(tab_names_value, str):
+                # Если это строка (одна вкладка)
+                tab_names = [tab_names_value] if tab_names_value.strip() else ["Без названия"]
+            elif isinstance(tab_names_value, list):
+                # Если это список (несколько вкладок)
+                tab_names = tab_names_value
+            else:
+                # Если что-то другое
+                tab_names = ["Без названия"]
+            
+            # Если количество названий не совпадает с количеством вкладок, корректируем
+            if len(tab_names) < tab_count:
+                # Добавляем недостающие названия
+                tab_names.extend(["Без названия"] * (tab_count - len(tab_names)))
+            elif len(tab_names) > tab_count:
+                # Обрезаем лишние названия
+                tab_names = tab_names[:tab_count]
             
             # Очищаем существующие вкладки
             while self.tabs_widget.count() > 0:
                 self.tabs_widget.removeTab(0)
             
             # Создаем вкладки
-            for i, tab_name in enumerate(tab_names):
-                # Упрощенная проверка имени вкладки
-                if not tab_name or not isinstance(tab_name, str):
-                    tab_name = "Без названия"  # Изменено на "Без названия"
-                self.add_new_tab(tab_name)
+            for i in range(tab_count):
+                tab_name = tab_names[i] if i < len(tab_names) else "Без названия"
+                
+                # Проверяем и корректируем название вкладки
+                if not tab_name or not isinstance(tab_name, str) or not tab_name.strip():
+                    tab_name = "Без названия"
+                else:
+                    tab_name = tab_name.strip()
+                    
+                # Создаем вкладку
+                tab_data = self.add_new_tab(tab_name)
+                
+                # Загружаем настройки для этой вкладки по индексу
+                if tab_data:
+                    self.load_tab_settings(tab_data, i)
             
             # Загружаем настройки планирования
             period_type = self.settings.value("period_type", "Ежедневно")
@@ -1753,7 +1956,6 @@ class BackupApp(QMainWindow):
             
             # Синхронизируем настройки с реальным состоянием системы
             if auto_start_setting != actual_auto_start:
-                # Если есть расхождение, исправляем настройки
                 self.auto_start_cb.setChecked(actual_auto_start)
                 self.settings.setValue("auto_start", actual_auto_start)
                 
@@ -1777,7 +1979,7 @@ class BackupApp(QMainWindow):
             # Проверяем, нужно ли запускать таймер
             timer_active = self.settings.value("timer_active", False, type=bool)
             
-            # Проверяем условия для автозапуска (используем текущую вкладку)
+            # Проверяем условия для автозапуска
             if timer_active:
                 tab_data = self.get_current_tab_data()
                 if tab_data and self.validate_backup_conditions_for_tab(tab_data):
@@ -1791,13 +1993,22 @@ class BackupApp(QMainWindow):
             
         except Exception as e:
             self.log_message(f"Ошибка при загрузке настроек: {str(e)}")
+            # При ошибке создаем одну вкладку с корректным названием
+            while self.tabs_widget.count() > 0:
+                self.tabs_widget.removeTab(0)
+            self.add_new_tab("Без названия")
             self.set_default_settings()
 
     def save_settings(self):
         """Сохраняет текущие настройки"""
+        # Очищаем ВСЕ старые группы вкладок перед сохранением
+        self.remove_all_tab_settings()
+        
         # Сохраняем информацию о вкладках
         tab_count = self.tabs_widget.count()
         tab_names = []
+        
+        # Сохраняем настройки каждой вкладки по индексу
         for i in range(tab_count):
             widget = self.tabs_widget.widget(i)
             if hasattr(widget, 'tab_data'):
@@ -1806,11 +2017,16 @@ class BackupApp(QMainWindow):
                 if not full_title:
                     full_title = "Без названия"
                 tab_names.append(full_title)
-                # Сохраняем настройки каждой вкладки с полным названием
-                self.save_tab_settings(widget.tab_data, full_title)
+                # Сохраняем настройки каждой вкладки по индексу
+                self.save_tab_settings(widget.tab_data, i)
         
         self.settings.setValue("tab_count", tab_count)
-        self.settings.setValue("tab_names", tab_names)
+        
+        # Явно обрабатываем случай с одной вкладкой
+        if tab_count == 1:
+            self.settings.setValue("tab_names", tab_names[0] if tab_names else "Без названия")
+        else:
+            self.settings.setValue("tab_names", tab_names)
         
         # Сохраняем настройки планирования
         self.settings.setValue("period_type", self.period_type_combo.currentText())
@@ -2046,18 +2262,6 @@ class BackupApp(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
-
-    # Устанавливаем шрифт GOST type A для всего приложения
-    font = QFont("Segoe UI Variable", 8)  
-    font.setWeight(50)            
-    app.setFont(font)
-
-    # Устанавливаем цвет текста для всего приложения
-    palette = QPalette()
-    palette.setColor(QPalette.WindowText, QColor(0, 0, 0))       # Черный цвет текста
-    palette.setColor(QPalette.Text, QColor(0, 0, 0))             # Черный цвет для текстовых полей
-    palette.setColor(QPalette.ButtonText, QColor(0, 0, 0))       # Черный цвет для кнопок
-    app.setPalette(palette)
     
     window = BackupApp()
     window.show()

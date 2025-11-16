@@ -137,27 +137,31 @@ def disable_auto_start(self):
 pip install pyinstaller
 
 # Сборка для Windows
-pyinstaller --onefile --noconsole --icon=icon.ico --name="BackupApp" backup_app.py
+pyinstaller --onefile --noconsole --icon=icon.ico --name="BackupApp" --add-data="settings.ini;." --add-data="icons/*;icons/" backup-app.py
 
 # Сборка для Linux
-pyinstaller --onefile --noconsole --name="BackupApp" backup_app.py
+pyinstaller --onefile --noconsole --icon=icon.png --name="BackupApp" --add-data="settings.ini:." --add-data="icons/*:icons/" backup-app.py
 
 # Сборка для macOS
-pyinstaller --onefile --noconsole --name="BackupApp" backup_app.py
+pyinstaller --onefile --noconsole --icon=icon.icns --name="BackupApp" --add-data="settings.ini:." --add-data="icons/*:icons/" backup-app.py
 ```
 
 ### Конфигурация PyInstaller
-Создайте файл `backup_app.spec`:
+Создайте файл `backup-app.spec`:
 ```python
 # -*- mode: python ; coding: utf-8 -*-
 
 block_cipher = None
 
 a = Analysis(
-    ['backup_app.py'],
+    ['backup-app.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ('settings.ini', '.'),
+        ('icons/files_icon.png', 'icons'),
+        ('icons/settings_icon.png', 'icons'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -177,6 +181,7 @@ exe = EXE(
     a.binaries,
     a.zipfiles,
     a.datas,
+    [],
     name='BackupApp',
     debug=False,
     bootloader_ignore_signals=False,
@@ -190,6 +195,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['icon.ico' if hasattr(sys, 'getwindowsversion') else None][0],
 )
 ```
 
