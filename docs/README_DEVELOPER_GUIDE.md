@@ -137,13 +137,13 @@ def disable_auto_start(self):
 pip install pyinstaller
 
 # Сборка для Windows
-pyinstaller --onefile --noconsole --icon=icon.ico --name="BackupApp" --add-data="settings.ini;." --add-data="icons/*;icons/" backup-app.py
+pyinstaller --onefile --noconsole --icon=icon.ico --name="BackupApp" --add-data="settings.ini;." --add-data="icons/*;icons/" --add-data="icon.ico;." backup-app_version_v8.py
 
 # Сборка для Linux
-pyinstaller --onefile --noconsole --icon=icon.png --name="BackupApp" --add-data="settings.ini:." --add-data="icons/*:icons/" backup-app.py
+pyinstaller --onefile --noconsole --icon=icon.png --name="BackupApp" --add-data="settings.ini:." --add-data="icons/*:icons/" --add-data="icon.ico;." backup-app.py
 
 # Сборка для macOS
-pyinstaller --onefile --noconsole --icon=icon.icns --name="BackupApp" --add-data="settings.ini:." --add-data="icons/*:icons/" backup-app.py
+pyinstaller --onefile --noconsole --icon=icon.icns --name="BackupApp" --add-data="settings.ini:." --add-data="icons/*:icons/" --add-data="icon.ico;." backup-app.py
 ```
 
 ### Конфигурация PyInstaller
